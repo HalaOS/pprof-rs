@@ -47,6 +47,7 @@ impl Drop for Reentrancy {
 }
 
 /// Backtrace mod mutex guard.
+#[must_use = "The guard drop immediately"]
 pub(crate) struct BacktraceGuard;
 
 /// Synchronize backtrace api calls and returns `locker` guard.

@@ -11,7 +11,6 @@ readme = "../../README.md"
 [dependencies]
 backtrace = { workspace = true }
 serde = { workspace = true }
-bson = { workspace = true }
 protobuf = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 
@@ -22,4 +21,4 @@ protoc-bin-vendored = { workspace = true }
 
 [features]
 default = ["report"]
-report = ["protobuf"]
+report = ["protobuf", "chrono"]

@@ -97,7 +97,7 @@ impl HeapProfiler {
     }
 
     fn register(&self, ptr: *mut u8, layout: Layout) {
-        backtrace_lock();
+        let _locker = backtrace_lock();
 
         let frames = get_backtrace();
 
@@ -110,14 +110,14 @@ impl HeapProfiler {
     }
 
     fn unregister(&self, ptr: *mut u8, _layout: Layout) {
-        backtrace_lock();
+        let _locker = backtrace_lock();
 
         unsafe { &mut *self.blocks.get() }.remove(&(ptr as usize));
     }
 
     #[cfg(feature = "report")]
     pub fn report(&self) -> crate::proto::gperf::Profile {
-        backtrace_lock();
+        let _locker = backtrace_lock();
 
         use crate::report::GperfHeapProfilerReport;
 
@@ -211,6 +211,8 @@ unsafe impl GlobalAlloc for PprofAlloc {
 
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        System.dealloc(ptr, layout);
+
         let guard = Reentrancy::new();
 
         if guard.is_ok() {
@@ -218,7 +220,5 @@ unsafe impl GlobalAlloc for PprofAlloc {
                 profiler.unregister(ptr, layout);
             }
         }
-
-        System.dealloc(ptr, layout);
     }
 }
