@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+use crate::helper::{backtrace_lock, Reentrancy};
+
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    cell::UnsafeCell,
+    collections::HashMap,
+    ffi::c_void,
+    mem::MaybeUninit,
+    ptr::null_mut,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
 #[derive(Serialize, Deserialize)]
 pub struct Symbol {
     pub name: String,
@@ -12,257 +24,201 @@ pub struct Symbol {
 #[derive(Serialize, Deserialize)]
 pub struct Block {
     pub size: usize,
-    pub frames: Vec<Symbol>,
+    pub frames: Vec<usize>,
 }
 
-#[cfg(feature = "alloc")]
-#[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
-mod alloc {
+/// Call this fn to get callstack, not via [`backtrace::trace`].
+///
+/// The [``backtrace``] standard api, which uses thread-local keys, may not use in GlobalAlloc.
+#[allow(unused)]
+pub(super) fn get_backtrace() -> Vec<usize> {
+    let mut stack = vec![];
 
-    use std::{
-        alloc::{GlobalAlloc, Layout, System},
-        cell::UnsafeCell,
-        ffi::{c_void, CStr},
-        mem::MaybeUninit,
-        ptr::{self, null_mut},
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    unsafe {
+        backtrace::trace_unsynchronized(|frame| {
+            stack.push(frame.symbol_address() as usize);
 
-    use leveldb_sys::{
-        leveldb_close, leveldb_delete, leveldb_open, leveldb_options_create,
-        leveldb_options_destroy, leveldb_options_set_create_if_missing, leveldb_put, leveldb_t,
-        leveldb_writeoptions_create, leveldb_writeoptions_destroy,
-    };
+            true
+        });
+    }
 
-    use crate::helper::{backtrace_lock, helper_println, Reentrancy};
+    stack
+}
 
-    use super::*;
+/// Call this fn to convert frame symbol address to frame symbol, not via [`backtrace::resolve`]
+///
+/// The [``backtrace``] standard api, which uses thread-local keys, may not use in GlobalAlloc.
+#[allow(unused)]
+pub(super) fn frames_to_symbols(frames: &[usize]) -> Vec<Symbol> {
+    let mut symbols = vec![];
 
-    fn backtrace() -> Vec<Symbol> {
-        let _guard = backtrace_lock();
-
-        let mut symbols = vec![];
+    for addr in frames {
+        let mut proto_symbol = None;
 
         // get frame symbol object.
         unsafe {
-            backtrace::trace_unsynchronized(|frame| {
-                let addr = frame.symbol_address() as usize;
+            // Safety: we provide frame to resolve symbol.
+            // let _guard = backtrace_lock();
 
-                let mut proto_symbol = None;
-
-                backtrace::resolve_unsynchronized(addr as *mut c_void, |symbol| {
-                    if proto_symbol.is_none() {
-                        proto_symbol = Some(Symbol {
-                            name: symbol.name().map(|s| s.to_string()).unwrap_or_default(),
-                            address: symbol.addr().unwrap_or(null_mut()) as usize,
-                            file_name: symbol
-                                .filename()
-                                .map(|path| path.to_str().unwrap().to_string())
-                                .unwrap_or_default(),
-                            line_no: symbol.lineno().unwrap_or_default(),
-                            col_no: symbol.colno().unwrap_or_default(),
-                        });
-                    }
-                });
-
-                if let Some(symbol) = proto_symbol {
-                    symbols.push(symbol);
+            backtrace::resolve_unsynchronized((*addr) as *mut c_void, |symbol| {
+                if proto_symbol.is_none() {
+                    proto_symbol = Some(Symbol {
+                        name: symbol.name().map(|s| s.to_string()).unwrap_or_default(),
+                        address: symbol.addr().unwrap_or(null_mut()) as usize,
+                        file_name: symbol
+                            .filename()
+                            .map(|path| path.to_str().unwrap().to_string())
+                            .unwrap_or_default(),
+                        line_no: symbol.lineno().unwrap_or_default(),
+                        col_no: symbol.colno().unwrap_or_default(),
+                    });
                 }
-
-                true
             });
-        }
+        };
 
-        symbols
-    }
-
-    pub struct HeapProfiler {
-        /// the snapshot database storage.
-        db: *mut leveldb_t,
-    }
-
-    impl HeapProfiler {
-        /// Create a  new `HeapProfiler` instance.
-        fn new() -> Option<Self> {
-            let db = unsafe {
-                let mut error = ptr::null_mut();
-                let options = leveldb_options_create();
-
-                leveldb_options_set_create_if_missing(options, 1);
-
-                let db = leveldb_open(options, c"./memory.pprof".as_ptr(), &mut error);
-
-                leveldb_options_destroy(options);
-
-                if error == ptr::null_mut() {
-                    db
-                } else {
-                    helper_println(error);
-                    return None;
-                }
-            };
-
-            Some(Self { db })
-        }
-
-        fn register(&self, ptr: *mut u8, layout: Layout) {
-            let frames = backtrace();
-
-            let block = Block {
-                size: layout.size(),
-                frames,
-            };
-
-            let value = bson::to_vec(&block).unwrap();
-
-            unsafe {
-                let ops = leveldb_writeoptions_create();
-
-                let key = ptr as u64;
-
-                let mut error = null_mut();
-
-                leveldb_put(
-                    self.db,
-                    ops,
-                    key.to_be_bytes().as_ptr() as *const i8,
-                    8,
-                    value.as_ptr() as *const i8,
-                    value.len(),
-                    &mut error,
-                );
-
-                leveldb_writeoptions_destroy(ops);
-
-                if error != ptr::null_mut() {
-                    helper_println(error);
-                    panic!("write frame failed.");
-                }
-            }
-        }
-
-        fn unregister(&self, ptr: *mut u8, _layout: Layout) {
-            unsafe {
-                let ops = leveldb_writeoptions_create();
-
-                let key = ptr as u64;
-
-                let mut error = null_mut();
-
-                leveldb_delete(
-                    self.db,
-                    ops,
-                    key.to_be_bytes().as_ptr() as *const i8,
-                    8,
-                    &mut error,
-                );
-
-                leveldb_writeoptions_destroy(ops);
-
-                if error != ptr::null_mut() {
-                    eprintln!("{:?}", CStr::from_ptr(error));
-                    panic!("remove frame failed.");
-                }
-            }
+        if let Some(symbol) = proto_symbol {
+            symbols.push(symbol);
         }
     }
 
-    impl Drop for HeapProfiler {
-        fn drop(&mut self) {
-            unsafe {
-                leveldb_close(self.db);
-            }
+    symbols
+}
+
+pub struct HeapProfiler {
+    blocks: UnsafeCell<HashMap<usize, Block>>,
+}
+
+impl HeapProfiler {
+    /// Create a  new `HeapProfiler` instance.
+    fn new() -> Option<Self> {
+        Some(Self {
+            blocks: Default::default(),
+        })
+    }
+
+    fn register(&self, ptr: *mut u8, layout: Layout) {
+        backtrace_lock();
+
+        let frames = get_backtrace();
+
+        let block = Block {
+            size: layout.size(),
+            frames,
+        };
+
+        unsafe { &mut *self.blocks.get() }.insert(ptr as usize, block);
+    }
+
+    fn unregister(&self, ptr: *mut u8, _layout: Layout) {
+        backtrace_lock();
+
+        unsafe { &mut *self.blocks.get() }.remove(&(ptr as usize));
+    }
+
+    #[cfg(feature = "report")]
+    pub fn report(&self) -> crate::proto::gperf::Profile {
+        backtrace_lock();
+
+        use crate::report::GperfHeapProfilerReport;
+
+        let mut reporter = GperfHeapProfilerReport::new();
+
+        for (ptr, block) in unsafe { &mut *self.blocks.get() }.iter() {
+            reporter.report_block_info(
+                (*ptr) as *mut u8,
+                block.size,
+                &frames_to_symbols(&block.frames),
+            );
+        }
+
+        reporter.build()
+    }
+}
+
+pub struct GLobalHeapProfiler {
+    initialized: AtomicUsize,
+    profiler: UnsafeCell<MaybeUninit<HeapProfiler>>,
+}
+
+impl GLobalHeapProfiler {
+    const fn new() -> Self {
+        GLobalHeapProfiler {
+            initialized: AtomicUsize::new(0),
+            profiler: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 
-    pub struct GLobalHeapProfiler {
-        initialized: AtomicUsize,
-        profiler: UnsafeCell<MaybeUninit<HeapProfiler>>,
-    }
+    fn get(&self) -> Option<&HeapProfiler> {
+        while self.initialized.load(Ordering::Acquire) < 2 {
+            if self
+                .initialized
+                .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                let profiler = match HeapProfiler::new() {
+                    Some(profiler) => profiler,
+                    None => {
+                        assert!(self
+                            .initialized
+                            .compare_exchange(1, 3, Ordering::AcqRel, Ordering::Relaxed)
+                            .is_ok());
+                        return None;
+                    }
+                };
 
-    impl GLobalHeapProfiler {
-        const fn new() -> Self {
-            GLobalHeapProfiler {
-                initialized: AtomicUsize::new(0),
-                profiler: UnsafeCell::new(MaybeUninit::uninit()),
+                unsafe { (&mut *self.profiler.get()).write(profiler) };
+
+                self.initialized.fetch_add(1, Ordering::Release);
             }
         }
 
-        fn get(&self) -> Option<&HeapProfiler> {
-            while self.initialized.load(Ordering::Acquire) < 2 {
-                if self
-                    .initialized
-                    .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    let profiler = match HeapProfiler::new() {
-                        Some(profiler) => profiler,
-                        None => {
-                            assert!(self
-                                .initialized
-                                .compare_exchange(1, 3, Ordering::AcqRel, Ordering::Relaxed)
-                                .is_ok());
-                            return None;
-                        }
-                    };
-
-                    unsafe { (&mut *self.profiler.get()).write(profiler) };
-
-                    self.initialized.fetch_add(1, Ordering::Release);
-                }
-            }
-
-            if self.initialized.load(Ordering::Acquire) == 2 {
-                Some(unsafe { (&*self.profiler.get()).assume_init_ref() })
-            } else {
-                None
-            }
-        }
-    }
-
-    unsafe impl Sync for GLobalHeapProfiler {}
-    unsafe impl Send for GLobalHeapProfiler {}
-
-    fn global_heap_profiler() -> Option<&'static HeapProfiler> {
-        static PROFILER: GLobalHeapProfiler = GLobalHeapProfiler::new();
-
-        PROFILER.get()
-    }
-
-    pub struct PprofAlloc;
-
-    unsafe impl GlobalAlloc for PprofAlloc {
-        #[inline]
-        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-            let ptr = System.alloc(layout);
-
-            let guard = Reentrancy::new();
-
-            if !guard.is_ok() {
-                return ptr;
-            }
-
-            if let Some(profiler) = global_heap_profiler() {
-                profiler.register(ptr, layout);
-            }
-
-            ptr
-        }
-
-        #[inline]
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-            let guard = Reentrancy::new();
-
-            if guard.is_ok() {
-                if let Some(profiler) = global_heap_profiler() {
-                    profiler.unregister(ptr, layout);
-                }
-            }
-
-            System.dealloc(ptr, layout);
+        if self.initialized.load(Ordering::Acquire) == 2 {
+            Some(unsafe { (&*self.profiler.get()).assume_init_ref() })
+        } else {
+            None
         }
     }
 }
 
-#[cfg(feature = "alloc")]
-pub use alloc::*;
+unsafe impl Sync for GLobalHeapProfiler {}
+unsafe impl Send for GLobalHeapProfiler {}
+
+pub fn global_heap_profiler() -> Option<&'static HeapProfiler> {
+    static PROFILER: GLobalHeapProfiler = GLobalHeapProfiler::new();
+
+    PROFILER.get()
+}
+
+pub struct PprofAlloc;
+
+unsafe impl GlobalAlloc for PprofAlloc {
+    #[inline]
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let ptr = System.alloc(layout);
+
+        let guard = Reentrancy::new();
+
+        if !guard.is_ok() {
+            return ptr;
+        }
+
+        if let Some(profiler) = global_heap_profiler() {
+            profiler.register(ptr, layout);
+        }
+
+        ptr
+    }
+
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        let guard = Reentrancy::new();
+
+        if guard.is_ok() {
+            if let Some(profiler) = global_heap_profiler() {
+                profiler.unregister(ptr, layout);
+            }
+        }
+
+        System.dealloc(ptr, layout);
+    }
+}

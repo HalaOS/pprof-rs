@@ -13,6 +13,7 @@ extern "C" {
     /// unlocks the backtrace mutex.
     fn backtrace_mutex_unlock();
 
+    #[allow(unused)]
     pub(crate) fn helper_println(message: *mut i8);
 
 }

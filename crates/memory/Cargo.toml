@@ -9,14 +9,17 @@ version.workspace = true
 readme = "../../README.md"
 
 [dependencies]
-leveldb-sys = { workspace = true, optional = true }
-backtrace = { workspace = true, optional = true }
+backtrace = { workspace = true }
 serde = { workspace = true }
-bson = { workspace = true, optional = true }
+bson = { workspace = true }
+protobuf = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 
 [build-dependencies]
 cc = { workspace = true }
+protobuf-codegen = { workspace = true }
+protoc-bin-vendored = { workspace = true }
 
 [features]
-default = ["alloc"]
-alloc = ["bson", "backtrace", "leveldb-sys"]
+default = ["report"]
+report = ["protobuf"]

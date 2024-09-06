@@ -1,11 +1,17 @@
-use hala_pprof_memory::PprofAlloc;
+use hala_pprof_memory::{report::snapshot, PprofAlloc};
 
 #[global_allocator]
 static ALLOC: PprofAlloc = PprofAlloc;
 
 #[test]
 fn alloc_string() {
-    for _ in 0..1000 {
+    for i in 0..1000 {
         _ = format!("hello world {}", "===");
+
+        if i == 50 {
+            snapshot();
+        }
     }
+
+    snapshot();
 }

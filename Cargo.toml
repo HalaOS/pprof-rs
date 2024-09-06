@@ -19,5 +19,6 @@ leveldb-sys = "^2.0"
 backtrace = "^0.3"
 serde = "^1.0"
 bson = "^2.11"
+chrono = "0.4.38"
 # inner
 hala-pprof-memory = { path = "crates/memory", version = "^0.2", default-features = false }
