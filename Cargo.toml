@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.2.16"
+
+[workspace.dependencies]
+log = { version = "^0.4" }
+pretty_env_logger = "^0.5"
+clap = "^4.5"
+thiserror = "^1.0" # protobuf
+protobuf-codegen = "^3"
+protoc-bin-vendored = "^3"
+protobuf = "^3"
+cc = "^1.1.16"
+leveldb-sys = "^2.0"
+backtrace = "^0.3"
+serde = "^1.0"
+bson = "^2.11"
+# inner
+hala-pprof-memory = { path = "crates/memory", version = "^0.2", default-features = false }

@@ -1,0 +1,18 @@
+[package]
+description = "pprof toolkit for cargo command line."
+documentation = "https://docs.rs/hala-pprof"
+edition.workspace = true
+license = "MIT"
+name = "hala-pprof"
+repository = "https://github.com/HalaOS/pprof-rs.git"
+version.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+leveldb-sys = { workspace = true, optional = true }
+protobuf = { workspace = true }
+hala-pprof-memory = { workspace = true }
+
+[build-dependencies]
+protobuf-codegen = { workspace = true }
+protoc-bin-vendored = { workspace = true }
