@@ -203,7 +203,13 @@ pub(crate) fn global_heap_profiler(max_frames: usize) -> Option<&'static HeapPro
 }
 
 /// An implementation of [`GlobalAlloc`] that supports memory profiling.
-pub struct PprofAlloc(pub usize);
+///
+/// If you are very concerned about memory usage, you can reduce it by
+/// appropriately decreasing the maximum depth of the capture stack.
+pub struct PprofAlloc(
+    /// The maximum depth of the captured stack.
+    pub usize,
+);
 
 unsafe impl GlobalAlloc for PprofAlloc {
     #[inline]
