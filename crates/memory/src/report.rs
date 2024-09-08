@@ -77,7 +77,7 @@ impl StringTable {
     }
 }
 /// a [`HeapProfilerReport`] implementation that converts sample data to google perftools format.
-pub struct GperfHeapProfilerReport {
+pub(crate) struct GperfHeapProfilerReport {
     string_table: StringTable,
     func_table: FnTable,
     loc_table: Vec<proto::Location>,
@@ -113,7 +113,7 @@ impl GperfHeapProfilerReport {
 }
 
 impl GperfHeapProfilerReport {
-    pub fn report_block_info(
+    pub(crate) fn report_block_info(
         &mut self,
         block: *mut u8,
         block_size: usize,
@@ -173,10 +173,12 @@ impl GperfHeapProfilerReport {
     }
 }
 
+/// Dump a new memory profiling report in [`pb format`](https://github.com/google/pprof/tree/main/proto)
+/// to the current working directory.
 pub fn snapshot() {
     let _guard = Reentrancy::new();
 
-    if let Some(profiler) = global_heap_profiler() {
+    if let Some(profiler) = global_heap_profiler(20) {
         let profile = profiler.report();
 
         let buf = profile.write_to_bytes().unwrap();

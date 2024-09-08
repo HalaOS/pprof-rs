@@ -1,7 +1,7 @@
-use hala_pprof_memory::{report::snapshot, PprofAlloc};
+use hala_pprof_memory::{snapshot, PprofAlloc};
 
 #[global_allocator]
-static ALLOC: PprofAlloc = PprofAlloc;
+static ALLOC: PprofAlloc = PprofAlloc(10);
 
 #[test]
 fn alloc_string() {

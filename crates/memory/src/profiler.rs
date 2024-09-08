@@ -13,7 +13,7 @@ use std::{
 };
 
 #[derive(Serialize, Deserialize)]
-pub struct Symbol {
+pub(crate) struct Symbol {
     pub name: String,
     pub address: usize,
     pub file_name: String,
@@ -22,7 +22,7 @@ pub struct Symbol {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Block {
+pub(crate) struct Block {
     pub size: usize,
     pub frames: Vec<usize>,
 }
@@ -31,14 +31,25 @@ pub struct Block {
 ///
 /// The [``backtrace``] standard api, which uses thread-local keys, may not use in GlobalAlloc.
 #[allow(unused)]
-pub(super) fn get_backtrace() -> Vec<usize> {
+pub(super) fn get_backtrace(max_frames: usize) -> Vec<usize> {
     let mut stack = vec![];
+
+    let mut skips = 0;
 
     unsafe {
         backtrace::trace_unsynchronized(|frame| {
+            if skips < 4 {
+                skips += 1;
+                return true;
+            }
+
             stack.push(frame.symbol_address() as usize);
 
-            true
+            if stack.len() >= max_frames {
+                false
+            } else {
+                true
+            }
         });
     }
 
@@ -84,14 +95,16 @@ pub(super) fn frames_to_symbols(frames: &[usize]) -> Vec<Symbol> {
     symbols
 }
 
-pub struct HeapProfiler {
+pub(crate) struct HeapProfiler {
+    max_frames: usize,
     blocks: UnsafeCell<HashMap<usize, Block>>,
 }
 
 impl HeapProfiler {
     /// Create a  new `HeapProfiler` instance.
-    fn new() -> Option<Self> {
+    fn new(max_frames: usize) -> Option<Self> {
         Some(Self {
+            max_frames,
             blocks: Default::default(),
         })
     }
@@ -99,7 +112,7 @@ impl HeapProfiler {
     fn register(&self, ptr: *mut u8, layout: Layout) {
         let _locker = backtrace_lock();
 
-        let frames = get_backtrace();
+        let frames = get_backtrace(self.max_frames);
 
         let block = Block {
             size: layout.size(),
@@ -135,7 +148,7 @@ impl HeapProfiler {
     }
 }
 
-pub struct GLobalHeapProfiler {
+pub(crate) struct GLobalHeapProfiler {
     initialized: AtomicUsize,
     profiler: UnsafeCell<MaybeUninit<HeapProfiler>>,
 }
@@ -148,14 +161,14 @@ impl GLobalHeapProfiler {
         }
     }
 
-    fn get(&self) -> Option<&HeapProfiler> {
+    fn get(&self, max_frames: usize) -> Option<&HeapProfiler> {
         while self.initialized.load(Ordering::Acquire) < 2 {
             if self
                 .initialized
                 .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
-                let profiler = match HeapProfiler::new() {
+                let profiler = match HeapProfiler::new(max_frames) {
                     Some(profiler) => profiler,
                     None => {
                         assert!(self
@@ -183,13 +196,14 @@ impl GLobalHeapProfiler {
 unsafe impl Sync for GLobalHeapProfiler {}
 unsafe impl Send for GLobalHeapProfiler {}
 
-pub fn global_heap_profiler() -> Option<&'static HeapProfiler> {
+pub(crate) fn global_heap_profiler(max_frames: usize) -> Option<&'static HeapProfiler> {
     static PROFILER: GLobalHeapProfiler = GLobalHeapProfiler::new();
 
-    PROFILER.get()
+    PROFILER.get(max_frames)
 }
 
-pub struct PprofAlloc;
+/// An implementation of [`GlobalAlloc`] that supports memory profiling.
+pub struct PprofAlloc(pub usize);
 
 unsafe impl GlobalAlloc for PprofAlloc {
     #[inline]
@@ -202,7 +216,7 @@ unsafe impl GlobalAlloc for PprofAlloc {
             return ptr;
         }
 
-        if let Some(profiler) = global_heap_profiler() {
+        if let Some(profiler) = global_heap_profiler(self.0) {
             profiler.register(ptr, layout);
         }
 
@@ -216,7 +230,7 @@ unsafe impl GlobalAlloc for PprofAlloc {
         let guard = Reentrancy::new();
 
         if guard.is_ok() {
-            if let Some(profiler) = global_heap_profiler() {
+            if let Some(profiler) = global_heap_profiler(self.0) {
                 profiler.unregister(ptr, layout);
             }
         }
