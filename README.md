@@ -1,4 +1,4 @@
-# A pprof collector implementation for rust programs
+# A [`pprof`](https://github.com/google/pprof) collector implementation for rust programs
 
 [![CI](https://github.com/HalaOS/pprof-rs/actions/workflows/ci.yaml/badge.svg)](https://github.com/HalaOS/pprof-rs/actions/workflows/ci.yaml)
 [![Release](https://github.com/HalaOS/pprof-rs/actions/workflows/release.yaml/badge.svg)](https://github.com/HalaOS/pprof-rs/actions/workflows/release.yaml)
