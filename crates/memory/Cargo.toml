@@ -10,7 +10,7 @@ readme = "../../README.md"
 
 [dependencies]
 backtrace = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 protobuf = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 
