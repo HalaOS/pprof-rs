@@ -183,6 +183,19 @@ pub fn snapshot() {
 
         let datetime: DateTime<Local> = SystemTime::now().into();
 
-        fs::write(format!("./memory.{}.pprof.pb", datetime.format("%+")), buf).unwrap();
+        fs::write(
+            format!(
+                "./memory.{}.pprof.pb",
+                datetime
+                    .format("%+")
+                    .to_string()
+                    .replace("-", "_")
+                    .replace(":", "_")
+                    .replace(" ", "_")
+                    .replace("+", "_")
+            ),
+            buf,
+        )
+        .unwrap();
     }
 }
